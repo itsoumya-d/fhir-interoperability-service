@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .auth import load_api_keys, require_role
 from .db import SessionLocal, init_db
+from .primary_care import BatchFileControl, ClinicalExceptionAnalyzer, PrimaryCareConsultation, validate_nhi
 from .service import ConflictError, FhirService, NotFoundError, ValidationError
 
 
@@ -79,6 +80,30 @@ def create_app(session_factory: sessionmaker = SessionLocal, api_keys: dict[str,
     @app.get("/audit")
     def audit(session: Session = Depends(db_session), _: str = Depends(viewer)) -> dict[str, Any]:
         return {"audit": FhirService(session).audit()}
+
+    @app.get("/fhir/primary-care/nhi/{nhi}")
+    def check_nhi(nhi: str, _: str = Depends(viewer)) -> dict[str, Any]:
+        is_valid = validate_nhi(nhi)
+        return {
+            "nhi": nhi.upper(),
+            "valid": is_valid,
+            "standard": "NZ Ministry of Health / HNZ NHI v1",
+        }
+
+    @app.post("/fhir/primary-care/validate-batch")
+    def validate_primary_care_batch(payload: dict[str, Any], _: str = Depends(integrator)) -> dict[str, Any]:
+        header = payload.get("header", {})
+        records_raw = payload.get("consultations", [])
+        file_control = BatchFileControl.validate_file_control(header, records_raw)
+
+        consultations = [PrimaryCareConsultation.from_dict(r) for r in records_raw]
+        analyzer = ClinicalExceptionAnalyzer()
+        analysis = analyzer.analyze_batch(consultations)
+
+        return {
+            "file_control": file_control,
+            "analysis": analysis,
+        }
 
     return app
 
